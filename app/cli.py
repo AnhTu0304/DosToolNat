@@ -15,12 +15,22 @@ from app.config import AppConfig, load_config
 from app.engine.runner import ConnectivityRunner, ConnectivityResult, LoadTestRunner
 from app.metrics.models import LoadTestReport
 from app.safety.controller import SafetyController, SafetyValidationError
+from app.scenarios.loader import list_scenarios, load_scenario
+from app.scenarios.models import Scenario, ScenarioResult, ScenarioStage, StageResult
+from app.scenarios.runner import ScenarioRunner
 
 app = typer.Typer(
     name="dos-tool",
     help="Controlled HTTP/DoS Testing Tool for authorized resilience testing.",
     no_args_is_help=True,
 )
+scenario_app = typer.Typer(
+    name="scenario",
+    help="Manage and execute multi-stage load testing scenarios.",
+    no_args_is_help=True,
+)
+app.add_typer(scenario_app, name="scenario")
+
 console = Console()
 logger = logging.getLogger("dos-tool")
 
@@ -38,7 +48,7 @@ def setup_logging(log_level: str) -> None:
 @app.command(name="version", help="Show dos-tool version.")
 def version() -> None:
     """Display application version and current phase."""
-    console.print(f"[bold cyan]dos-tool[/bold cyan] version [bold green]{__version__}[/bold green] (Phase 2 - Controlled HTTP Load Engine)")
+    console.print(f"[bold cyan]dos-tool[/bold cyan] version [bold green]{__version__}[/bold green] (Phase 3 - Scenario Engine)")
 
 
 @app.command(name="config", help="Display application configuration.")
@@ -186,13 +196,11 @@ def load(
         cfg_file = config_path or (Path("configs/config.yaml") if Path("configs/config.yaml").exists() else None)
         cfg: AppConfig = load_config(cfg_file)
         setup_logging(cfg.log_level)
-        # Suppress individual request logs from httpx during high-volume load test
         logging.getLogger("httpx").setLevel(logging.WARNING)
         logging.getLogger("httpcore").setLevel(logging.WARNING)
 
         effective_timeout = timeout if timeout is not None else cfg.request_timeout
 
-        # Safety Controller Validation
         safety = SafetyController(cfg)
         validated_target = safety.validate_target_url(target)
         safety.validate_load_parameters(
@@ -280,6 +288,215 @@ def load(
 
         raise typer.Exit(code=0)
 
+    except SafetyValidationError as exc:
+        console.print(f"\n[bold red]{exc}[/bold red]")
+        if debug:
+            raise
+        raise typer.Exit(code=1)
+    except typer.Exit:
+        raise
+    except Exception as exc:
+        console.print(f"\n[bold red]Unexpected Error:[/bold red] {exc}")
+        if debug:
+            raise
+        raise typer.Exit(code=1)
+
+
+# ============================================================================
+# Scenario Subcommands
+# ============================================================================
+
+@scenario_app.command(name="list", help="List available load test scenarios.")
+def list_scenarios_cmd(
+    scenarios_dir: Annotated[
+        Path,
+        typer.Option("--dir", help="Scenarios directory path.")
+    ] = Path("scenarios"),
+) -> None:
+    """Discover and list all valid load testing scenarios."""
+    scenarios = list_scenarios(scenarios_dir)
+    if not scenarios:
+        console.print("[yellow]No scenarios found in scenarios directory.[/yellow]")
+        return
+
+    console.print("\nAvailable Scenarios")
+    console.print("-" * 32)
+    for sc in scenarios:
+        console.print(f"[bold cyan]{sc['name']}[/bold cyan]")
+    console.print("")
+
+
+@scenario_app.command(name="show", help="Display details of a specific scenario.")
+def show_scenario_cmd(
+    name: Annotated[
+        str,
+        typer.Argument(help="Scenario name or YAML file path.")
+    ],
+    scenarios_dir: Annotated[
+        Path,
+        typer.Option("--dir", help="Scenarios directory path.")
+    ] = Path("scenarios"),
+) -> None:
+    """Display the configuration, stages, and total duration of a scenario."""
+    try:
+        scenario = load_scenario(name, scenarios_dir=scenarios_dir)
+        console.print("\nScenario")
+        console.print("-" * 32)
+        console.print(f"Name        : {scenario.name}")
+        console.print(f"Description : {scenario.description}")
+        console.print(f"Target      : {scenario.target}")
+        console.print(f"Method      : {scenario.method}\n")
+        console.print("Stages:\n")
+        for idx, stg in enumerate(scenario.stages, start=1):
+            rate_d = int(stg.rate) if float(stg.rate).is_integer() else stg.rate
+            dur_d = int(stg.duration) if float(stg.duration).is_integer() else stg.duration
+            console.print(f"{idx}. Rate={rate_d} req/s, Concurrency={stg.concurrency}, Duration={dur_d}s")
+
+        total_d = int(scenario.total_duration) if float(scenario.total_duration).is_integer() else scenario.total_duration
+        console.print(f"\nTotal Duration: {total_d}s\n")
+    except FileNotFoundError as exc:
+        console.print(f"\n[bold red]Error:[/bold red] {exc}")
+        raise typer.Exit(code=1)
+    except Exception as exc:
+        console.print(f"\n[bold red]Error loading scenario:[/bold red] {exc}")
+        raise typer.Exit(code=1)
+
+
+@scenario_app.command(name="run", help="Execute a multi-stage scenario.")
+def run_scenario_cmd(
+    name: Annotated[
+        str,
+        typer.Argument(help="Scenario name or YAML file path.")
+    ],
+    config_path: Annotated[
+        Optional[Path],
+        typer.Option("--config", help="Path to custom config YAML file.")
+    ] = None,
+    scenarios_dir: Annotated[
+        Path,
+        typer.Option("--dir", help="Scenarios directory path.")
+    ] = Path("scenarios"),
+    timeout: Annotated[
+        Optional[float],
+        typer.Option("--timeout", help="Custom request timeout in seconds.")
+    ] = None,
+    debug: Annotated[
+        bool,
+        typer.Option("--debug", help="Enable debug mode to show full tracebacks.")
+    ] = False,
+) -> None:
+    """Execute all stages of a scenario sequentially with live progress and final summary."""
+    try:
+        cfg_file = config_path or (Path("configs/config.yaml") if Path("configs/config.yaml").exists() else None)
+        cfg: AppConfig = load_config(cfg_file)
+        setup_logging(cfg.log_level)
+        logging.getLogger("httpx").setLevel(logging.WARNING)
+        logging.getLogger("httpcore").setLevel(logging.WARNING)
+
+        effective_timeout = timeout if timeout is not None else cfg.request_timeout
+
+        scenario = load_scenario(name, scenarios_dir=scenarios_dir)
+
+        # Safety validation
+        safety = SafetyController(cfg)
+        safety.validate_scenario(scenario)
+
+        header_line = "=" * 48
+        stage_line = "-" * 48
+        console.print("\nDOS TOOL - SCENARIO TEST")
+        console.print(header_line + "\n")
+        console.print(f"Scenario      : {scenario.name}")
+        console.print(f"Description   : {scenario.description}")
+        console.print(f"Target        : {scenario.target}")
+        console.print(f"Method        : {scenario.method}\n")
+
+        total_stages = len(scenario.stages)
+
+        def on_stage_start(stage_idx: int, stage: ScenarioStage) -> None:
+            console.print(header_line)
+            console.print(f"Stage {stage_idx}/{total_stages}")
+            console.print(stage_line)
+            rate_disp = int(stage.rate) if float(stage.rate).is_integer() else stage.rate
+            dur_disp = int(stage.duration) if float(stage.duration).is_integer() else stage.duration
+            console.print(f"Rate          : {rate_disp} req/s")
+            console.print(f"Concurrency   : {stage.concurrency}")
+            console.print(f"Duration      : {dur_disp}s\n")
+
+        def on_stage_complete(stage_idx: int, stage_res: StageResult) -> None:
+            rep = stage_res.report
+            console.print(f"Total Requests: {rep.total_requests}")
+            console.print(f"Successful    : {rep.successful_requests}")
+            console.print(f"Failed        : {rep.failed_requests}")
+            console.print(f"P95           : {rep.p95_latency:.1f} ms")
+            console.print(f"P99           : {rep.p99_latency:.1f} ms")
+            console.print(f"Actual RPS    : {rep.actual_rate:.2f}\n")
+
+        runner = ScenarioRunner(
+            scenario=scenario,
+            timeout=effective_timeout,
+            on_stage_start=on_stage_start,
+            on_stage_complete=on_stage_complete,
+        )
+
+        try:
+            scenario_result: ScenarioResult = asyncio.run(runner.run())
+        except KeyboardInterrupt:
+            console.print("\n[bold yellow]Scenario interrupted by user. Finalizing report...[/bold yellow]")
+            runner.stop()
+            scenario_result = asyncio.run(runner.run())
+
+        # Display Final Scenario Summary
+        console.print(header_line)
+        console.print("SCENARIO RESULT")
+        console.print(header_line + "\n")
+        console.print(f"Scenario          : {scenario_result.scenario_name}")
+        console.print(f"Target            : {scenario_result.target}")
+        console.print(f"Total Duration    : {scenario_result.total_duration:.1f} s\n")
+        console.print(f"Total Requests    : {scenario_result.total_requests}")
+        console.print(f"Successful        : {scenario_result.total_successful}")
+        console.print(f"Failed            : {scenario_result.total_failed}")
+        console.print(f"Timeouts          : {scenario_result.total_timeouts}")
+        console.print(f"Connection Errors : {scenario_result.total_connection_errors}\n")
+
+        console.print(stage_line)
+        console.print("STAGE SUMMARY")
+        console.print(stage_line + "\n")
+
+        summary_table = Table(show_header=True, header_style="bold magenta", box=None)
+        summary_table.add_column("Stage", justify="right", style="cyan")
+        summary_table.add_column("Rate", justify="right")
+        summary_table.add_column("Concurrency", justify="right")
+        summary_table.add_column("Requests", justify="right")
+        summary_table.add_column("Success", justify="right", style="green")
+        summary_table.add_column("Failed", justify="right", style="red")
+        summary_table.add_column("P95", justify="right", style="yellow")
+        summary_table.add_column("P99", justify="right", style="yellow")
+
+        for s_res in scenario_result.stage_results:
+            rep = s_res.report
+            stg = s_res.stage
+            rate_s = str(int(stg.rate) if float(stg.rate).is_integer() else stg.rate)
+            summary_table.add_row(
+                str(s_res.stage_index),
+                rate_s,
+                str(stg.concurrency),
+                str(rep.total_requests),
+                str(rep.successful_requests),
+                str(rep.failed_requests),
+                f"{rep.p95_latency:.1f} ms",
+                f"{rep.p99_latency:.1f} ms",
+            )
+
+        console.print(summary_table)
+        console.print("\n" + header_line + "\n")
+
+        raise typer.Exit(code=0)
+
+    except FileNotFoundError as exc:
+        console.print(f"\n[bold red]Error:[/bold red] {exc}")
+        if debug:
+            raise
+        raise typer.Exit(code=1)
     except SafetyValidationError as exc:
         console.print(f"\n[bold red]{exc}[/bold red]")
         if debug:

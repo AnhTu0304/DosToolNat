@@ -137,3 +137,43 @@ class SafetyController:
                 f"Safety validation failed.\n\n{formatted_errors}"
             )
 
+    def validate_scenario(self, scenario: "Scenario") -> None:
+        """Validate an entire scenario and all its stages against safety thresholds."""
+        self.validate_target_url(scenario.target)
+
+        errors = []
+
+        total_duration = scenario.total_duration
+        if total_duration > self.config.max_test_duration:
+            duration_disp = int(total_duration) if float(total_duration).is_integer() else total_duration
+            errors.append(
+                f"Total scenario duration: {duration_disp}s\n"
+                f"Maximum allowed: {self.config.max_test_duration}s"
+            )
+
+        for idx, stage in enumerate(scenario.stages, start=1):
+            if stage.rate > self.config.max_request_rate:
+                rate_disp = int(stage.rate) if float(stage.rate).is_integer() else stage.rate
+                errors.append(
+                    f"Stage {idx} Requested rate: {rate_disp} req/s\n"
+                    f"Maximum allowed: {self.config.max_request_rate} req/s"
+                )
+            if stage.concurrency > self.config.max_concurrency:
+                errors.append(
+                    f"Stage {idx} Requested concurrency: {stage.concurrency}\n"
+                    f"Maximum allowed: {self.config.max_concurrency}"
+                )
+            if stage.duration > self.config.max_test_duration:
+                dur_disp = int(stage.duration) if float(stage.duration).is_integer() else stage.duration
+                errors.append(
+                    f"Stage {idx} Requested duration: {dur_disp}s\n"
+                    f"Maximum allowed: {self.config.max_test_duration}s"
+                )
+
+        if errors:
+            formatted_errors = "\n\n".join(errors)
+            raise SafetyValidationError(
+                f"Safety validation failed.\n\n{formatted_errors}"
+            )
+
+

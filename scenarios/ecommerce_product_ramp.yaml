@@ -1,0 +1,24 @@
+name: ecommerce_product_ramp
+
+description: Controlled ramp-up test for ecommerce product API
+
+target: http://localhost:5000/api/products
+
+method: GET
+
+stages:
+  - rate: 2
+    concurrency: 1
+    duration: 10
+
+  - rate: 5
+    concurrency: 2
+    duration: 10
+
+  - rate: 10
+    concurrency: 5
+    duration: 10
+
+  - rate: 20
+    concurrency: 10
+    duration: 10

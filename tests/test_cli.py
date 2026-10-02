@@ -20,10 +20,10 @@ def test_cli_help():
 
 
 def test_cli_version():
-    """Verify dos-tool version returns 0.2.0."""
+    """Verify dos-tool version returns 0.3.0."""
     result = runner.invoke(app, ["version"])
     assert result.exit_code == 0
-    assert "0.2.0" in result.output
+    assert "0.3.0" in result.output
 
 
 def test_cli_config_default():
@@ -158,3 +158,39 @@ def test_cli_load_success_mocked():
         assert "HTTP 2xx       : 200" in result.output
         assert "P50 Latency    : 38.21 ms" in result.output
         assert "P99 Latency    : 91.32 ms" in result.output
+
+
+def test_cli_scenario_help():
+    """Verify dos-tool scenario --help displays commands and exits 0."""
+    result = runner.invoke(app, ["scenario", "--help"])
+    assert result.exit_code == 0
+    assert "list" in result.output
+    assert "show" in result.output
+    assert "run" in result.output
+
+
+def test_cli_scenario_list():
+    """Verify dos-tool scenario list displays discovered scenarios."""
+    result = runner.invoke(app, ["scenario", "list"])
+    assert result.exit_code == 0
+    assert "ecommerce_product_ramp" in result.output
+    assert "frontend_load" in result.output
+
+
+def test_cli_scenario_show():
+    """Verify dos-tool scenario show displays scenario details without running."""
+    result = runner.invoke(app, ["scenario", "show", "ecommerce_product_ramp"])
+    assert result.exit_code == 0
+    assert "ecommerce_product_ramp" in result.output
+    assert "http://localhost:5000/api/products" in result.output
+    assert "Stages:" in result.output
+    assert "Total Duration" in result.output
+
+
+def test_cli_scenario_show_not_found():
+    """Verify dos-tool scenario show displays error for non-existent scenario."""
+    result = runner.invoke(app, ["scenario", "show", "non_existent_xyz"])
+    assert result.exit_code == 1
+    assert "Scenario not found" in result.output
+    assert "Traceback" not in result.output
+

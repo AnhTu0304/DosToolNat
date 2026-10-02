@@ -38,10 +38,6 @@ htmlcov/
 reports/*
 !reports/.gitkeep
 
-# Scenarios output
-scenarios/*
-!scenarios/.gitkeep
-
 # IDEs & OS
 .idea/
 .vscode/

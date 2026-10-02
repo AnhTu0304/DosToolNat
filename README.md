@@ -1,6 +1,6 @@
 # dos-tool
 
-Controlled HTTP load and resilience testing tool for security and performance testing of web applications that you own or have explicit permission to test.
+Controlled HTTP load, resilience, and multi-stage scenario testing tool for security and performance assessment of web applications that you own or have explicit permission to test.
 
 ---
 
@@ -17,30 +17,35 @@ This project is fully standalone and has no dependency on separate AI self-heali
 
 ## 2. Current Scope
 
-This repository currently implements **Phase 1 (Project Foundation)** and **Phase 2 (Controlled HTTP Load Engine)**.
+This repository currently implements:
+* **Phase 1 — Project Foundation** (CLI, Configuration, Safety Controls, Logging, Basic HTTP Test)
+* **Phase 2 — Controlled HTTP Load Engine** (Asynchronous Load Engine, Concurrency & Rate Limiting, Latency Percentiles)
+* **Phase 3 — Scenario Engine** (Declarative Multi-Stage YAML Scenarios, Stage Orchestration, Aggregated Reporting)
 
-### Implemented in Phase 1 & Phase 2:
-* **CLI Interface**: Powered by Typer and Rich with commands:
+### Implemented Features:
+* **CLI Interface (Typer + Rich)**:
   * `dos-tool --help`
   * `dos-tool version`
   * `dos-tool config`
   * `dos-tool test` (Single HTTP connectivity probe)
   * `dos-tool load` (Asynchronous controlled load test)
-* **Configuration Management**: Strongly-typed configuration schema using Pydantic V2 and PyYAML support.
-* **Safety Controller**: Pre-execution parameter validation enforcing URL schemes, hosts, timeouts, duration, and rate limits. Rejects out-of-boundary parameters before any network traffic is dispatched.
+  * `dos-tool scenario list` (Discover and list available YAML scenarios)
+  * `dos-tool scenario show <name>` (Inspect scenario stages and duration without sending traffic)
+  * `dos-tool scenario run <name>` (Execute multi-stage scenario sequentially)
+* **Scenario Engine**:
+  * YAML-based scenario definition in `scenarios/`.
+  * Multi-stage sequential execution reusing the Phase 2 Load Engine.
+  * Real-time stage progress telemetry and comprehensive stage summary table.
+  * Preserves exact per-stage percentiles (P95, P99) without statistical distortion.
+* **Safety Controls**:
+  * Pre-execution parameter validation enforcing URL schemes, hosts, timeouts, duration, and rate limits.
+  * **Total Scenario Duration Rule**: Rejects scenarios if the sum of all stage durations exceeds `max_test_duration`.
 * **Logging System**: Sanitized console logging without sensitive headers, credentials, or cookies.
-* **Asynchronous HTTP Load Engine**:
-  * Paced request scheduling via `RateScheduler` with drift compensation (avoids traffic bursts).
-  * Strict concurrency control via `asyncio.Semaphore`.
-  * Telemetry collection: total requests, successes, failures, HTTP status codes (2xx, 3xx, 4xx, 5xx), timeouts, connection errors.
-  * High-precision latency percentiles: Min, Max, Average, P50, P95, P99.
-  * Achieved RPS vs. Target RPS tracking.
-  * Graceful shutdown on `Ctrl+C` with partial metrics compilation.
-* **Unit Test Suite**: 58 automated unit tests using pytest and mock HTTP transports.
+* **Unit Test Suite**: 78 automated unit tests using pytest and mock HTTP transports.
 
 > [!NOTE]
-> **Phase 2 Restrictions:**
-> The load engine is strictly **GET-only** to prevent mutating state or ecommerce data.
+> **Scope Restrictions:**
+> The load engine and scenario engine are strictly **GET-only** to prevent mutating state or ecommerce data.
 > No IP rotation, proxy rotation, WAF bypass, CAPTCHA bypass, distributed attacks, or stealth evasion mechanisms are implemented.
 
 ---
@@ -97,108 +102,191 @@ pip install -e .
 
 ## 4. Usage
 
-### 1. Show Help Information
+### 1. Show Help & Version
 ```bash
 dos-tool --help
-dos-tool load --help
-```
-
-### 2. Check Version
-```bash
 dos-tool version
 ```
 *Output:*
 ```text
-dos-tool version 0.2.0 (Phase 2 - Controlled HTTP Load Engine)
+dos-tool version 0.3.0 (Phase 3 - Scenario Engine)
 ```
 
-### 3. View Configuration & Safety Limits
+### 2. View Configuration & Safety Limits
 ```bash
 dos-tool config
 ```
 
-### 4. Basic HTTP Connectivity Test (Single Request)
+### 3. Basic HTTP Connectivity Test (Single Request)
 ```bash
 dos-tool test --target http://localhost:3000
 ```
 
-### 5. Controlled HTTP Load Testing
+### 4. Controlled Single-Stage Load Test
 ```bash
 dos-tool load --target http://localhost:3000 --rate 10 --concurrency 5 --duration 20
 ```
 
-*Testing against a safe backend GET endpoint:*
+### 5. Multi-Stage Scenario Engine (Phase 3)
+
+#### List Available Scenarios
 ```bash
-dos-tool load --target http://localhost:5000/api/products --rate 2 --concurrency 1 --duration 10
+dos-tool scenario list
+```
+*Output:*
+```text
+Available Scenarios
+--------------------------------
+ecommerce_product_ramp
+frontend_load
+```
+
+#### Inspect Scenario Details
+```bash
+dos-tool scenario show ecommerce_product_ramp
+```
+*Output:*
+```text
+Scenario
+--------------------------------
+Name        : ecommerce_product_ramp
+Description : Controlled ramp-up test for ecommerce product API
+Target      : http://localhost:5000/api/products
+Method      : GET
+
+Stages:
+
+1. Rate=2 req/s, Concurrency=1, Duration=10s
+2. Rate=5 req/s, Concurrency=2, Duration=10s
+3. Rate=10 req/s, Concurrency=5, Duration=10s
+4. Rate=20 req/s, Concurrency=10, Duration=10s
+
+Total Duration: 40s
+```
+
+#### Execute a Scenario
+```bash
+dos-tool scenario run frontend_load
 ```
 
 *Example Terminal Output:*
 ```text
-DOS TOOL - CONTROLLED LOAD TEST
-----------------------------------------
-Target       : http://localhost:5000/api/products
-Method       : GET
-Duration     : 10 s
-Target Rate  : 2 req/s
-Concurrency  : 1
-----------------------------------------
+DOS TOOL - SCENARIO TEST
+================================================
 
-Running...
+Scenario      : frontend_load
+Description   : Controlled load test for ecommerce frontend
+Target        : http://localhost:3000
+Method        : GET
 
-----------------------------------------
-LOAD TEST RESULT
-----------------------------------------
-Total Requests : 20
-Successful     : 20
-Failed         : 0
+================================================
+Stage 1/3
+------------------------------------------------
+Rate          : 2 req/s
+Concurrency   : 1
+Duration      : 10s
 
-HTTP 2xx       : 20
-HTTP 3xx       : 0
-HTTP 4xx       : 0
-HTTP 5xx       : 0
+Total Requests: 20
+Successful    : 20
+Failed        : 0
+P95           : 20.4 ms
+P99           : 243.7 ms
+Actual RPS    : 1.96
 
-Timeouts       : 0
-Connection Err : 0
+================================================
+Stage 2/3
+------------------------------------------------
+Rate          : 5 req/s
+Concurrency   : 2
+Duration      : 10s
 
-Average Latency: 6.39 ms
-Min Latency    : 3.09 ms
-Max Latency    : 39.19 ms
-P50 Latency    : 4.62 ms
-P95 Latency    : 8.15 ms
-P99 Latency    : 32.98 ms
+Total Requests: 50
+Successful    : 50
+Failed        : 0
+P95           : 5.3 ms
+P99           : 267.1 ms
+Actual RPS    : 4.93
 
-Average RPS    : 1.96
-Target RPS     : 2.00
+================================================
+Stage 3/3
+------------------------------------------------
+Rate          : 10 req/s
+Concurrency   : 5
+Duration      : 10s
 
-Test Duration  : 10.19 s
-----------------------------------------
+Total Requests: 100
+Successful    : 100
+Failed        : 0
+P95           : 4.9 ms
+P99           : 268.8 ms
+Actual RPS    : 9.85
+
+================================================
+SCENARIO RESULT
+================================================
+
+Scenario          : frontend_load
+Target            : http://localhost:3000
+Total Duration    : 30.5 s
+
+Total Requests    : 170
+Successful        : 170
+Failed            : 0
+Timeouts          : 0
+Connection Errors : 0
+
+------------------------------------------------
+STAGE SUMMARY
+------------------------------------------------
+
+ Stage  Rate  Concurrency  Requests  Success  Failed      P95       P99 
+     1     2            1        20       20       0  20.4 ms  243.7 ms 
+     2     5            2        50       50       0   5.3 ms  267.1 ms 
+     3    10            5       100      100       0   4.9 ms  268.8 ms 
+
+================================================
 ```
 
 ---
 
-## 5. Safety Guardrails & Validation
+## 5. Scenario YAML Format
 
-All executions are validated prior to dispatch. If any parameter exceeds configured safety boundaries, the command is rejected immediately:
+Scenarios are defined in YAML files located in `scenarios/`:
 
-```bash
-dos-tool load --target http://localhost:3000 --rate 1000 --concurrency 100 --duration 120
+```yaml
+name: ecommerce_product_ramp
+description: Controlled ramp-up test for ecommerce product API
+target: http://localhost:5000/api/products
+method: GET
+
+stages:
+  - rate: 2
+    concurrency: 1
+    duration: 10
+
+  - rate: 5
+    concurrency: 2
+    duration: 10
+
+  - rate: 10
+    concurrency: 5
+    duration: 10
+
+  - rate: 20
+    concurrency: 10
+    duration: 10
 ```
 
-*Output:*
-```text
-Safety validation failed.
+---
 
-Requested rate: 1000 req/s
-Maximum allowed: 100 req/s
+## 6. Safety Guardrails & Validation
 
-Requested concurrency: 100
-Maximum allowed: 20
+All executions are validated prior to dispatch:
+1. Target URL format & scheme (`http`/`https` with host).
+2. Per-stage rate, concurrency, duration within configured maximums.
+3. Cumulative scenario duration must not exceed `max_test_duration` (default: 60s).
 
-Requested duration: 120s
-Maximum allowed: 60s
-```
-
-Default safety limits in `configs/config.yaml`:
+Default limits in `configs/config.yaml`:
 * `max_test_duration`: 60 seconds
 * `max_request_rate`: 100 req/s
 * `max_concurrency`: 20 connections
@@ -206,15 +294,21 @@ Default safety limits in `configs/config.yaml`:
 
 ---
 
-## 6. Architecture
+## 7. Architecture
 
 ```text
 dos-tool/
 │
 ├── app/
-│   ├── __init__.py           # Package version definition
-│   ├── cli.py                # Typer CLI application (test, load, config, version)
+│   ├── __init__.py           # Package version definition (0.3.0)
+│   ├── cli.py                # Typer CLI application (test, load, scenario)
 │   ├── config.py             # Pydantic AppConfig model and YAML loader
+│   │
+│   ├── scenarios/
+│   │   ├── __init__.py
+│   │   ├── models.py         # Scenario, ScenarioStage, ScenarioResult models
+│   │   ├── loader.py         # Scenario directory scanner and YAML parser
+│   │   └── runner.py         # Sequential stage orchestration runner
 │   │
 │   ├── engine/
 │   │   ├── __init__.py
@@ -227,15 +321,16 @@ dos-tool/
 │   │   ├── models.py         # RequestResult and LoadTestReport models
 │   │   └── collector.py      # MetricsCollector with percentile calculations
 │   │
-│   ├── scenarios/
-│   │   └── __init__.py       # Placeholder for Phase 3
-│   │
 │   └── safety/
 │       ├── __init__.py
 │       └── controller.py     # SafetyController multi-parameter validator
 │
 ├── configs/
 │   └── config.yaml           # Default safety configuration
+│
+├── scenarios/
+│   ├── ecommerce_product_ramp.yaml
+│   └── frontend_load.yaml
 │
 ├── tests/
 │   ├── test_cli.py           # CLI invocation & safety rejection tests
@@ -244,7 +339,9 @@ dos-tool/
 │   ├── test_http.py          # HTTP connectivity probe tests
 │   ├── test_load_engine.py   # LoadTestRunner & async worker tests
 │   ├── test_metrics.py       # Metrics collection & percentile calculation tests
-│   └── test_scheduler.py     # RateScheduler tick count & timing tests
+│   ├── test_scheduler.py     # RateScheduler tick count & timing tests
+│   ├── test_scenarios.py     # Scenario YAML loader & validation tests
+│   └── test_scenario_runner.py # ScenarioRunner execution & order tests
 │
 ├── docs/
 │   └── superpowers/specs/    # Technical design specifications
@@ -257,7 +354,7 @@ dos-tool/
 
 ---
 
-## 7. Running Automated Tests
+## 8. Running Automated Tests
 
 Run the full pytest suite:
 
@@ -271,15 +368,15 @@ Or with verbose output:
 python -m pytest -v
 ```
 
-All 58 unit tests use mock transports (`httpx.MockTransport`) and never make outbound requests to external websites.
+All 78 unit tests use mock transports (`httpx.MockTransport`) and never make outbound requests to external websites.
 
 ---
 
-## 8. Roadmap
+## 9. Roadmap
 
 * [x] **Phase 1 — Project Foundation**
 * [x] **Phase 2 — HTTP Load Engine**
-* [ ] **Phase 3 — Scenario Engine** (Configurable attack patterns: Slowloris, burst, ramp-up)
+* [x] **Phase 3 — Scenario Engine**
 * [ ] **Phase 4 — Metrics & Reporting** (JSON/CSV exports, visual charts)
 * [ ] **Phase 5 — Web Dashboard** (Real-time telemetry and experiment controls)
 * [ ] **Phase 6 — Fault Injection** (Chaos engineering hooks and failure simulation)
