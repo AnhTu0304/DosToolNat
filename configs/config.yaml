@@ -1,0 +1,9 @@
+# Default configuration for dos-tool (Phase 1)
+# Note: Safety limits are safeguards and will be enforced by Phase 2 engines.
+
+target_url: "http://localhost:8000"
+request_timeout: 5
+max_test_duration: 60
+max_request_rate: 100
+max_concurrency: 20
+log_level: "INFO"
