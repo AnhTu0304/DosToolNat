@@ -85,3 +85,55 @@ class SafetyController:
                 raise SafetyValidationError(
                     f"Concurrency exceeds configured maximum ({self.config.max_concurrency})"
                 )
+
+    def validate_load_parameters(
+        self,
+        rate: float,
+        concurrency: int,
+        duration: float,
+        timeout: float | None = None,
+    ) -> None:
+        """Validate all load parameters together, collecting all violations if any."""
+        errors = []
+
+        if rate <= 0:
+            errors.append("Requested rate must be greater than 0")
+        elif rate > self.config.max_request_rate:
+            rate_display = int(rate) if float(rate).is_integer() else rate
+            errors.append(
+                f"Requested rate: {rate_display} req/s\n"
+                f"Maximum allowed: {self.config.max_request_rate} req/s"
+            )
+
+        if concurrency <= 0:
+            errors.append("Requested concurrency must be greater than 0")
+        elif concurrency > self.config.max_concurrency:
+            errors.append(
+                f"Requested concurrency: {concurrency}\n"
+                f"Maximum allowed: {self.config.max_concurrency}"
+            )
+
+        if duration <= 0:
+            errors.append("Requested duration must be greater than 0")
+        elif duration > self.config.max_test_duration:
+            duration_display = int(duration) if float(duration).is_integer() else duration
+            errors.append(
+                f"Requested duration: {duration_display}s\n"
+                f"Maximum allowed: {self.config.max_test_duration}s"
+            )
+
+        if timeout is not None:
+            if timeout <= 0:
+                errors.append("Requested timeout must be greater than 0")
+            elif timeout > self.config.request_timeout:
+                errors.append(
+                    f"Requested timeout: {timeout}s\n"
+                    f"Maximum allowed: {self.config.request_timeout}s"
+                )
+
+        if errors:
+            formatted_errors = "\n\n".join(errors)
+            raise SafetyValidationError(
+                f"Safety validation failed.\n\n{formatted_errors}"
+            )
+

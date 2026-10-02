@@ -4,6 +4,7 @@ from unittest.mock import patch
 from typer.testing import CliRunner
 from app.cli import app
 from app.engine.runner import ConnectivityResult
+from app.metrics.models import LoadTestReport
 
 runner = CliRunner()
 
@@ -19,10 +20,10 @@ def test_cli_help():
 
 
 def test_cli_version():
-    """Verify dos-tool version returns 0.1.0."""
+    """Verify dos-tool version returns 0.2.0."""
     result = runner.invoke(app, ["version"])
     assert result.exit_code == 0
-    assert "0.1.0" in result.output
+    assert "0.2.0" in result.output
 
 
 def test_cli_config_default():
@@ -78,3 +79,82 @@ def test_cli_test_failure_mocked():
         assert "DOS TOOL" in result.output
         assert "FAILED" in result.output
         assert "Connection refused" in result.output
+
+
+def test_cli_load_help():
+    """Verify dos-tool load --help displays arguments and exits 0."""
+    result = runner.invoke(app, ["load", "--help"])
+    assert result.exit_code == 0
+    assert "--target" in result.output
+    assert "--rate" in result.output
+    assert "--concurrency" in result.output
+    assert "--duration" in result.output
+    assert "--timeout" in result.output
+
+
+def test_cli_load_safety_rejection():
+    """Verify dos-tool load rejects out-of-boundary parameters before execution."""
+    result = runner.invoke(
+        app,
+        [
+            "load",
+            "--target", "http://localhost:3000",
+            "--rate", "1000",
+            "--concurrency", "100",
+            "--duration", "120",
+        ],
+    )
+    assert result.exit_code == 1
+    assert "Safety validation failed" in result.output
+    assert "Requested rate: 1000 req/s" in result.output
+    assert "Maximum allowed: 100 req/s" in result.output
+    assert "Traceback" not in result.output
+
+
+def test_cli_load_success_mocked():
+    """Verify dos-tool load runs and displays structured summary."""
+    mock_report = LoadTestReport(
+        target="http://localhost:3000",
+        method="GET",
+        requested_rate=10.0,
+        actual_rate=10.0,
+        concurrency=5,
+        duration=20.0,
+        total_requests=200,
+        successful_requests=200,
+        failed_requests=0,
+        status_2xx=200,
+        status_3xx=0,
+        status_4xx=0,
+        status_5xx=0,
+        timeouts=0,
+        connection_errors=0,
+        min_latency=12.10,
+        max_latency=95.42,
+        average_latency=42.31,
+        p50_latency=38.21,
+        p95_latency=72.55,
+        p99_latency=91.32,
+        start_time=100.0,
+        end_time=120.01,
+        elapsed_time=20.01,
+    )
+
+    with patch("app.cli.LoadTestRunner.run", return_value=mock_report):
+        result = runner.invoke(
+            app,
+            [
+                "load",
+                "--target", "http://localhost:3000",
+                "--rate", "10",
+                "--concurrency", "5",
+                "--duration", "20",
+            ],
+        )
+        assert result.exit_code == 0
+        assert "DOS TOOL - CONTROLLED LOAD TEST" in result.output
+        assert "LOAD TEST RESULT" in result.output
+        assert "Total Requests : 200" in result.output
+        assert "HTTP 2xx       : 200" in result.output
+        assert "P50 Latency    : 38.21 ms" in result.output
+        assert "P99 Latency    : 91.32 ms" in result.output

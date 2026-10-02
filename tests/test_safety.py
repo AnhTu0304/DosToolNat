@@ -79,3 +79,21 @@ def test_limits_exceeding_bounds(default_controller, kwargs, expected_match):
     """Verify that limits exceeding configured maximums raise SafetyValidationError."""
     with pytest.raises(SafetyValidationError, match=expected_match):
         default_controller.validate_limits(**kwargs)
+
+
+def test_validate_load_parameters_multi_error(default_controller):
+    """Verify aggregated safety validation error when multiple limits are violated."""
+    with pytest.raises(SafetyValidationError) as exc_info:
+        default_controller.validate_load_parameters(
+            rate=1000,
+            concurrency=100,
+            duration=120,
+        )
+    msg = str(exc_info.value)
+    assert "Safety validation failed" in msg
+    assert "Requested rate: 1000 req/s" in msg
+    assert "Maximum allowed: 100 req/s" in msg
+    assert "Requested concurrency: 100" in msg
+    assert "Maximum allowed: 20" in msg
+    assert "Requested duration: 120s" in msg
+    assert "Maximum allowed: 60s" in msg
