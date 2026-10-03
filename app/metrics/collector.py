@@ -125,4 +125,6 @@ class MetricsCollector:
             start_time=start_time,
             end_time=end_time,
             elapsed_time=round(elapsed, 2),
+            results=list(self._results),
         )
+

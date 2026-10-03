@@ -18,6 +18,7 @@ from app.safety.controller import SafetyController, SafetyValidationError
 from app.scenarios.loader import list_scenarios, load_scenario
 from app.scenarios.models import Scenario, ScenarioResult, ScenarioStage, StageResult
 from app.scenarios.runner import ScenarioRunner
+from app.reporting.recorder import build_experiment_result, ExperimentRecorder
 
 app = typer.Typer(
     name="dos-tool",
@@ -48,7 +49,7 @@ def setup_logging(log_level: str) -> None:
 @app.command(name="version", help="Show dos-tool version.")
 def version() -> None:
     """Display application version and current phase."""
-    console.print(f"[bold cyan]dos-tool[/bold cyan] version [bold green]{__version__}[/bold green] (Phase 3 - Scenario Engine)")
+    console.print(f"[bold cyan]dos-tool[/bold cyan] version [bold green]{__version__}[/bold green] (Phase 4 - Metrics & Experiment Reporting)")
 
 
 @app.command(name="config", help="Display application configuration.")
@@ -376,6 +377,10 @@ def run_scenario_cmd(
         Path,
         typer.Option("--dir", help="Scenarios directory path.")
     ] = Path("scenarios"),
+    output_dir: Annotated[
+        Path,
+        typer.Option("--output", "-o", help="Base directory for experiment reports.")
+    ] = Path("reports"),
     timeout: Annotated[
         Optional[float],
         typer.Option("--timeout", help="Custom request timeout in seconds.")
@@ -488,7 +493,31 @@ def run_scenario_cmd(
             )
 
         console.print(summary_table)
-        console.print("\n" + header_line + "\n")
+        console.print("\n" + stage_line)
+        console.print("EXPERIMENT REPORTS")
+        console.print(stage_line + "\n")
+
+        # Phase 4 - Save Experiment Reports
+        recorder = ExperimentRecorder(output_base_dir=output_dir)
+        cfg_dict = {
+            "timeout": effective_timeout,
+            "max_rate": cfg.max_request_rate,
+            "max_concurrency": cfg.max_concurrency,
+            "max_duration": cfg.max_test_duration,
+        }
+        exp_result = build_experiment_result(
+            scenario=scenario,
+            scenario_result=scenario_result,
+            config=cfg_dict,
+        )
+        saved_dir = recorder.record(exp_result)
+
+        console.print(f"Reports Directory : [cyan]{saved_dir}[/cyan]")
+        console.print(f"JSON Report       : {saved_dir / 'experiment.json'}")
+        console.print(f"Stages CSV        : {saved_dir / 'stages.csv'}")
+        console.print(f"Latency CSV       : {saved_dir / 'latency.csv'}")
+        console.print(f"HTML Report       : [bold green]{saved_dir / 'report.html'}[/bold green]\n")
+        console.print(header_line + "\n")
 
         raise typer.Exit(code=0)
 

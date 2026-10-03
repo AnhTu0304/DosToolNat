@@ -21,6 +21,7 @@ This repository currently implements:
 * **Phase 1 — Project Foundation** (CLI, Configuration, Safety Controls, Logging, Basic HTTP Test)
 * **Phase 2 — Controlled HTTP Load Engine** (Asynchronous Load Engine, Concurrency & Rate Limiting, Latency Percentiles)
 * **Phase 3 — Scenario Engine** (Declarative Multi-Stage YAML Scenarios, Stage Orchestration, Aggregated Reporting)
+* **Phase 4 — Metrics & Experiment Reporting** (Multi-Format Archiving: JSON, CSV, and Self-Contained HTML Reports)
 
 ### Implemented Features:
 * **CLI Interface (Typer + Rich)**:
@@ -31,17 +32,23 @@ This repository currently implements:
   * `dos-tool load` (Asynchronous controlled load test)
   * `dos-tool scenario list` (Discover and list available YAML scenarios)
   * `dos-tool scenario show <name>` (Inspect scenario stages and duration without sending traffic)
-  * `dos-tool scenario run <name>` (Execute multi-stage scenario sequentially)
+  * `dos-tool scenario run <name> [--output <dir>]` (Execute multi-stage scenario and persist reports)
 * **Scenario Engine**:
   * YAML-based scenario definition in `scenarios/`.
   * Multi-stage sequential execution reusing the Phase 2 Load Engine.
   * Real-time stage progress telemetry and comprehensive stage summary table.
   * Preserves exact per-stage percentiles (P95, P99) without statistical distortion.
+* **Metrics & Reporting (Phase 4)**:
+  * Automatic run archiving in `reports/<scenario_name>/<experiment_id>/`.
+  * **Experiment JSON (`experiment.json`)**: Full experiment metadata, aggregate metrics, scenario-level percentiles, per-stage metrics, and per-request latency samples.
+  * **Stages CSV (`stages.csv`)**: Tabular stage summary ready for spreadsheets (Excel / LibreOffice / Pandas).
+  * **Latency CSV (`latency.csv`)**: Raw per-request sample trace with ISO 8601 UTC timestamps, stage IDs, status codes, and error categories (`timeout`, `connection_error`, `http_error`).
+  * **Interactive Standalone HTML Report (`report.html`)**: Zero external dependencies (offline-ready), responsive modern UI with metric summary cards, stage tables, and error breakdown.
 * **Safety Controls**:
   * Pre-execution parameter validation enforcing URL schemes, hosts, timeouts, duration, and rate limits.
   * **Total Scenario Duration Rule**: Rejects scenarios if the sum of all stage durations exceeds `max_test_duration`.
 * **Logging System**: Sanitized console logging without sensitive headers, credentials, or cookies.
-* **Unit Test Suite**: 78 automated unit tests using pytest and mock HTTP transports.
+* **Unit Test Suite**: 89 automated unit tests using pytest and mock HTTP transports.
 
 > [!NOTE]
 > **Scope Restrictions:**
@@ -244,6 +251,16 @@ STAGE SUMMARY
      2     5            2        50       50       0   5.3 ms  267.1 ms 
      3    10            5       100      100       0   4.9 ms  268.8 ms 
 
+------------------------------------------------
+EXPERIMENT REPORTS
+------------------------------------------------
+
+Reports Directory : reports/frontend_load/20261003_153000_frontend_load
+JSON Report       : reports/frontend_load/20261003_153000_frontend_load/experiment.json
+Stages CSV        : reports/frontend_load/20261003_153000_frontend_load/stages.csv
+Latency CSV       : reports/frontend_load/20261003_153000_frontend_load/latency.csv
+HTML Report       : reports/frontend_load/20261003_153000_frontend_load/report.html
+
 ================================================
 ```
 
@@ -300,7 +317,7 @@ Default limits in `configs/config.yaml`:
 dos-tool/
 │
 ├── app/
-│   ├── __init__.py           # Package version definition (0.3.0)
+│   ├── __init__.py           # Package version definition (0.4.0)
 │   ├── cli.py                # Typer CLI application (test, load, scenario)
 │   ├── config.py             # Pydantic AppConfig model and YAML loader
 │   │
@@ -318,8 +335,16 @@ dos-tool/
 │   │
 │   ├── metrics/
 │   │   ├── __init__.py
-│   │   ├── models.py         # RequestResult and LoadTestReport models
-│   │   └── collector.py      # MetricsCollector with percentile calculations
+│   │   ├── models.py         # LoadTestReport, ExperimentResult, Stage & Latency models
+│   │   ├── collector.py      # MetricsCollector with raw sample preservation
+│   │   └── statistics.py     # Independent statistics: true percentiles, success & error rates
+│   │
+│   ├── reporting/
+│   │   ├── __init__.py
+│   │   ├── recorder.py       # ExperimentRecorder & experiment ID generator
+│   │   ├── json_reporter.py  # JSON report generator (experiment.json)
+│   │   ├── csv_reporter.py   # CSV reports generator (stages.csv, latency.csv)
+│   │   └── html_reporter.py  # Interactive standalone HTML generator (report.html)
 │   │
 │   └── safety/
 │       ├── __init__.py
@@ -332,13 +357,17 @@ dos-tool/
 │   ├── ecommerce_product_ramp.yaml
 │   └── frontend_load.yaml
 │
+├── reports/                  # Generated experiment reports by scenario and timestamp
+│
 ├── tests/
-│   ├── test_cli.py           # CLI invocation & safety rejection tests
+│   ├── test_cli.py           # CLI invocation, report generation & safety tests
 │   ├── test_config.py        # Configuration validation tests
 │   ├── test_safety.py        # SafetyController limit & URL tests
 │   ├── test_http.py          # HTTP connectivity probe tests
 │   ├── test_load_engine.py   # LoadTestRunner & async worker tests
 │   ├── test_metrics.py       # Metrics collection & percentile calculation tests
+│   ├── test_statistics.py   # Standalone statistical calculations tests
+│   ├── test_reporting.py    # JSON/CSV/HTML writers & ExperimentRecorder tests
 │   ├── test_scheduler.py     # RateScheduler tick count & timing tests
 │   ├── test_scenarios.py     # Scenario YAML loader & validation tests
 │   └── test_scenario_runner.py # ScenarioRunner execution & order tests
@@ -368,7 +397,7 @@ Or with verbose output:
 python -m pytest -v
 ```
 
-All 78 unit tests use mock transports (`httpx.MockTransport`) and never make outbound requests to external websites.
+All 89 unit tests use mock transports (`httpx.MockTransport`) and never make outbound requests to external websites.
 
 ---
 
@@ -377,7 +406,7 @@ All 78 unit tests use mock transports (`httpx.MockTransport`) and never make out
 * [x] **Phase 1 — Project Foundation**
 * [x] **Phase 2 — HTTP Load Engine**
 * [x] **Phase 3 — Scenario Engine**
-* [ ] **Phase 4 — Metrics & Reporting** (JSON/CSV exports, visual charts)
+* [x] **Phase 4 — Metrics & Reporting** (JSON/CSV exports, standalone HTML reports)
 * [ ] **Phase 5 — Web Dashboard** (Real-time telemetry and experiment controls)
 * [ ] **Phase 6 — Fault Injection** (Chaos engineering hooks and failure simulation)
 * [ ] **Phase 7 — Experiment Framework** (Automated resilience experiments and evaluation)

@@ -20,10 +20,10 @@ def test_cli_help():
 
 
 def test_cli_version():
-    """Verify dos-tool version returns 0.3.0."""
+    """Verify dos-tool version returns 0.4.0."""
     result = runner.invoke(app, ["version"])
     assert result.exit_code == 0
-    assert "0.3.0" in result.output
+    assert "0.4.0" in result.output
 
 
 def test_cli_config_default():
@@ -193,4 +193,67 @@ def test_cli_scenario_show_not_found():
     assert result.exit_code == 1
     assert "Scenario not found" in result.output
     assert "Traceback" not in result.output
+
+
+def test_cli_scenario_run_generates_reports(tmp_path):
+    """Verify dos-tool scenario run executes and saves experiment reports."""
+    from app.scenarios.models import ScenarioStage, StageResult, ScenarioResult
+    from app.metrics.models import RequestResult
+
+    req = RequestResult(timestamp=100.0, status_code=200, latency_ms=15.0, success=True)
+    mock_stage_report = LoadTestReport(
+        target="http://localhost:3000",
+        method="GET",
+        requested_rate=2.0,
+        actual_rate=2.0,
+        concurrency=1,
+        duration=10.0,
+        total_requests=1,
+        successful_requests=1,
+        failed_requests=0,
+        status_2xx=1,
+        min_latency=15.0,
+        max_latency=15.0,
+        average_latency=15.0,
+        p50_latency=15.0,
+        p95_latency=15.0,
+        p99_latency=15.0,
+        start_time=100.0,
+        end_time=110.0,
+        elapsed_time=10.0,
+        results=[req],
+    )
+    stg = ScenarioStage(rate=2, concurrency=1, duration=10)
+    stage_res = StageResult(stage_index=1, stage=stg, report=mock_stage_report)
+    mock_scenario_result = ScenarioResult(
+        scenario_name="frontend_load",
+        target="http://localhost:3000",
+        total_duration=10.0,
+        stage_results=[stage_res],
+        total_requests=1,
+        total_successful=1,
+        total_failed=0,
+        total_timeouts=0,
+        total_connection_errors=0,
+    )
+
+    with patch("app.cli.ScenarioRunner.run", return_value=mock_scenario_result):
+        result = runner.invoke(
+            app,
+            ["scenario", "run", "frontend_load", "--output", str(tmp_path)],
+        )
+        assert result.exit_code == 0
+        assert "EXPERIMENT REPORTS" in result.output
+        assert "experiment.json" in result.output
+        assert "report.html" in result.output
+
+        # Verify files on disk
+        scenario_output_dirs = list((tmp_path / "frontend_load").glob("*"))
+        assert len(scenario_output_dirs) == 1
+        exp_dir = scenario_output_dirs[0]
+        assert (exp_dir / "experiment.json").is_file()
+        assert (exp_dir / "stages.csv").is_file()
+        assert (exp_dir / "latency.csv").is_file()
+        assert (exp_dir / "report.html").is_file()
+
 
