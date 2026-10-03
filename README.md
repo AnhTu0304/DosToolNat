@@ -22,6 +22,7 @@ This repository currently implements:
 * **Phase 2 — Controlled HTTP Load Engine** (Asynchronous Load Engine, Concurrency & Rate Limiting, Latency Percentiles)
 * **Phase 3 — Scenario Engine** (Declarative Multi-Stage YAML Scenarios, Stage Orchestration, Aggregated Reporting)
 * **Phase 4 — Metrics & Experiment Reporting** (Multi-Format Archiving: JSON, CSV, and Self-Contained HTML Reports)
+* **Phase 5 — Controlled Fault / Incident Injection** (Latency Injection, HTTP 5xx Spikes, Combined Incidents, Recovery Monitoring)
 
 ### Implemented Features:
 * **CLI Interface (Typer + Rich)**:
@@ -30,25 +31,20 @@ This repository currently implements:
   * `dos-tool config`
   * `dos-tool test` (Single HTTP connectivity probe)
   * `dos-tool load` (Asynchronous controlled load test)
-  * `dos-tool scenario list` (Discover and list available YAML scenarios)
-  * `dos-tool scenario show <name>` (Inspect scenario stages and duration without sending traffic)
-  * `dos-tool scenario run <name> [--output <dir>]` (Execute multi-stage scenario and persist reports)
-* **Scenario Engine**:
-  * YAML-based scenario definition in `scenarios/`.
-  * Multi-stage sequential execution reusing the Phase 2 Load Engine.
-  * Real-time stage progress telemetry and comprehensive stage summary table.
-  * Preserves exact per-stage percentiles (P95, P99) without statistical distortion.
-* **Metrics & Reporting (Phase 4)**:
-  * Automatic run archiving in `reports/<scenario_name>/<experiment_id>/`.
-  * **Experiment JSON (`experiment.json`)**: Full experiment metadata, aggregate metrics, scenario-level percentiles, per-stage metrics, and per-request latency samples.
-  * **Stages CSV (`stages.csv`)**: Tabular stage summary ready for spreadsheets (Excel / LibreOffice / Pandas).
-  * **Latency CSV (`latency.csv`)**: Raw per-request sample trace with ISO 8601 UTC timestamps, stage IDs, status codes, and error categories (`timeout`, `connection_error`, `http_error`).
-  * **Interactive Standalone HTML Report (`report.html`)**: Zero external dependencies (offline-ready), responsive modern UI with metric summary cards, stage tables, and error breakdown.
+  * `dos-tool scenario list | show | run` (Multi-stage load scenarios)
+  * `dos-tool incident list | show | run` (Controlled fault and incident experiments)
+* **Controlled Fault & Incident Injection (Phase 5)**:
+  * **Supported Fault Types**: Artificial Latency (`delay_ms`), Server Error Spikes (`http_5xx`), and Combined Incidents.
+  * **Incident Lifecycle**: Baseline $\to$ Load Started $\to$ Fault Started $\to$ Fault Active $\to$ Fault Ended $\to$ Recovery Monitoring $\to$ Recovered / Timeout $\to$ Completed.
+  * **Safe Test Controllers**: Header Injection (`X-Test-Fault-Type`, `X-Test-Fault-Delay-Ms`, `X-Test-Fault-Error-Rate`) and Dedicated Test Mock API Adapter.
+  * **Data-Driven Recovery Detection**: Continuous evaluation against configurable thresholds ($P95 \le \text{max\_p95\_ms}$ and $\text{error\_rate} \le \text{max\_error\_rate}$) sustained over consecutive healthy samples.
+  * **Guaranteed Fault Cleanup**: Lifecycle-safe deactivation ensures faults are always cleaned up, even during user `Ctrl+C` interrupt.
+  * **Incident Reports (6 files)**: `experiment.json`, `stages.csv`, `latency.csv`, `faults.csv`, `timeline.csv`, and `report.html` (featuring Before/During/After comparative cards and lifecycle timeline).
 * **Safety Controls**:
   * Pre-execution parameter validation enforcing URL schemes, hosts, timeouts, duration, and rate limits.
-  * **Total Scenario Duration Rule**: Rejects scenarios if the sum of all stage durations exceeds `max_test_duration`.
+  * **Total Duration Rule**: Rejects experiments if the sum of baseline, fault, and recovery duration exceeds `max_test_duration` (60s).
 * **Logging System**: Sanitized console logging without sensitive headers, credentials, or cookies.
-* **Unit Test Suite**: 89 automated unit tests using pytest and mock HTTP transports.
+* **Unit Test Suite**: 103 automated unit tests using pytest, anyio, and mock HTTP transports.
 
 > [!NOTE]
 > **Scope Restrictions:**
@@ -317,9 +313,15 @@ Default limits in `configs/config.yaml`:
 dos-tool/
 │
 ├── app/
-│   ├── __init__.py           # Package version definition (0.4.0)
-│   ├── cli.py                # Typer CLI application (test, load, scenario)
+│   ├── __init__.py           # Package version definition (0.5.0)
+│   ├── cli.py                # Typer CLI application (test, load, scenario, incident)
 │   ├── config.py             # Pydantic AppConfig model and YAML loader
+│   │
+│   ├── engine/
+│   │   ├── __init__.py
+│   │   ├── runner.py         # ConnectivityRunner & LoadTestRunner (headers support)
+│   │   ├── worker.py         # Async HTTP worker with semaphore concurrency control
+│   │   └── scheduler.py      # RateScheduler with pacing and drift compensation
 │   │
 │   ├── scenarios/
 │   │   ├── __init__.py
@@ -327,11 +329,13 @@ dos-tool/
 │   │   ├── loader.py         # Scenario directory scanner and YAML parser
 │   │   └── runner.py         # Sequential stage orchestration runner
 │   │
-│   ├── engine/
+│   ├── incidents/
 │   │   ├── __init__.py
-│   │   ├── runner.py         # ConnectivityRunner & LoadTestRunner
-│   │   ├── worker.py         # Async HTTP worker with semaphore concurrency control
-│   │   └── scheduler.py      # RateScheduler with pacing and drift compensation
+│   │   ├── models.py         # FaultConfig, RecoveryConfig, IncidentScenario & Result models
+│   │   ├── fault_controller.py # Header & Endpoint fault controller abstractions
+│   │   ├── recovery_detector.py # Data-driven consecutive criteria evaluator
+│   │   ├── runner.py         # IncidentRunner orchestrating Baseline -> Fault -> Recovery
+│   │   └── loader.py         # Incident YAML discovery and loader
 │   │
 │   ├── metrics/
 │   │   ├── __init__.py
@@ -344,7 +348,8 @@ dos-tool/
 │   │   ├── recorder.py       # ExperimentRecorder & experiment ID generator
 │   │   ├── json_reporter.py  # JSON report generator (experiment.json)
 │   │   ├── csv_reporter.py   # CSV reports generator (stages.csv, latency.csv)
-│   │   └── html_reporter.py  # Interactive standalone HTML generator (report.html)
+│   │   ├── html_reporter.py  # Interactive standalone HTML generator (report.html)
+│   │   └── incident_reporter.py # Incident-specific 6-file exporter & comparative HTML
 │   │
 │   └── safety/
 │       ├── __init__.py
@@ -355,7 +360,10 @@ dos-tool/
 │
 ├── scenarios/
 │   ├── ecommerce_product_ramp.yaml
-│   └── frontend_load.yaml
+│   ├── frontend_load.yaml
+│   ├── incident_latency.yaml
+│   ├── incident_http_5xx.yaml
+│   └── incident_combined.yaml
 │
 ├── reports/                  # Generated experiment reports by scenario and timestamp
 │
@@ -365,6 +373,7 @@ dos-tool/
 │   ├── test_safety.py        # SafetyController limit & URL tests
 │   ├── test_http.py          # HTTP connectivity probe tests
 │   ├── test_load_engine.py   # LoadTestRunner & async worker tests
+│   ├── test_incidents.py     # Phase 5 fault, recovery, runner & report tests
 │   ├── test_metrics.py       # Metrics collection & percentile calculation tests
 │   ├── test_statistics.py   # Standalone statistical calculations tests
 │   ├── test_reporting.py    # JSON/CSV/HTML writers & ExperimentRecorder tests
@@ -373,7 +382,7 @@ dos-tool/
 │   └── test_scenario_runner.py # ScenarioRunner execution & order tests
 │
 ├── docs/
-│   └── superpowers/specs/    # Technical design specifications
+│   └── superpowers/specs/    # Technical design specifications (Phase 3, 4, 5)
 │
 ├── requirements.txt
 ├── pyproject.toml
@@ -397,7 +406,7 @@ Or with verbose output:
 python -m pytest -v
 ```
 
-All 89 unit tests use mock transports (`httpx.MockTransport`) and never make outbound requests to external websites.
+All 103 unit tests use mock transports (`httpx.MockTransport`) and never make outbound requests to external websites.
 
 ---
 
@@ -407,6 +416,7 @@ All 89 unit tests use mock transports (`httpx.MockTransport`) and never make out
 * [x] **Phase 2 — HTTP Load Engine**
 * [x] **Phase 3 — Scenario Engine**
 * [x] **Phase 4 — Metrics & Reporting** (JSON/CSV exports, standalone HTML reports)
-* [ ] **Phase 5 — Web Dashboard** (Real-time telemetry and experiment controls)
-* [ ] **Phase 6 — Fault Injection** (Chaos engineering hooks and failure simulation)
-* [ ] **Phase 7 — Experiment Framework** (Automated resilience experiments and evaluation)
+* [x] **Phase 5 — Controlled Fault / Incident Injection** (Latency, 5xx, Combined, Recovery Tracking)
+* [ ] **Phase 6 — Kubernetes Integration + Monitoring**
+* [ ] **Phase 7 — AI Detection + Prediction + RCA**
+* [ ] **Phase 8 — Self-Healing + Benchmark**

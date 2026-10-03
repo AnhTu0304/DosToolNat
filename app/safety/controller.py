@@ -176,4 +176,50 @@ class SafetyController:
                 f"Safety validation failed.\n\n{formatted_errors}"
             )
 
+    def validate_incident(self, incident: "IncidentScenario") -> None:
+        """Validate an incident experiment and all its phases against safety thresholds."""
+        self.validate_target_url(incident.target)
+
+        errors = []
+        rec_dur = incident.recovery.timeout if incident.recovery.enabled else 0.0
+        total_duration = incident.baseline.duration + incident.fault.duration + rec_dur
+
+        if total_duration > self.config.max_test_duration:
+            duration_disp = int(total_duration) if float(total_duration).is_integer() else total_duration
+            errors.append(
+                f"Total incident duration ({duration_disp}s = baseline {incident.baseline.duration}s + "
+                f"fault {incident.fault.duration}s + recovery {rec_dur}s)\n"
+                f"Maximum allowed: {self.config.max_test_duration}s"
+            )
+
+        if incident.baseline.rate > self.config.max_request_rate:
+            errors.append(
+                f"Baseline rate: {incident.baseline.rate} req/s\n"
+                f"Maximum allowed: {self.config.max_request_rate} req/s"
+            )
+
+        if incident.baseline.concurrency > self.config.max_concurrency:
+            errors.append(
+                f"Baseline concurrency: {incident.baseline.concurrency}\n"
+                f"Maximum allowed: {self.config.max_concurrency}"
+            )
+
+        if incident.fault.duration > self.config.max_test_duration:
+            errors.append(
+                f"Fault duration: {incident.fault.duration}s\n"
+                f"Maximum allowed: {self.config.max_test_duration}s"
+            )
+
+        if incident.recovery.enabled and incident.recovery.timeout > self.config.max_test_duration:
+            errors.append(
+                f"Recovery timeout: {incident.recovery.timeout}s\n"
+                f"Maximum allowed: {self.config.max_test_duration}s"
+            )
+
+        if errors:
+            formatted_errors = "\n\n".join(errors)
+            raise SafetyValidationError(
+                f"Safety validation failed.\n\n{formatted_errors}"
+            )
+
 

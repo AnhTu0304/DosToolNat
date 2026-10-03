@@ -1,0 +1,22 @@
+name: incident_http_5xx
+description: Controlled HTTP 5xx error spike incident experiment
+target: http://localhost:5000/api/products
+method: GET
+
+baseline:
+  rate: 5
+  concurrency: 2
+  duration: 10
+
+fault:
+  type: http_5xx
+  error_rate: 0.30
+  duration: 20
+
+recovery:
+  enabled: true
+  criteria:
+    max_p95_ms: 50
+    max_error_rate: 0.01
+    consecutive_healthy_samples: 3
+  timeout: 20

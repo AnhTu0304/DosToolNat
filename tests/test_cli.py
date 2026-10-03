@@ -20,10 +20,10 @@ def test_cli_help():
 
 
 def test_cli_version():
-    """Verify dos-tool version returns 0.4.0."""
+    """Verify dos-tool version returns 0.5.0."""
     result = runner.invoke(app, ["version"])
     assert result.exit_code == 0
-    assert "0.4.0" in result.output
+    assert "0.5.0" in result.output
 
 
 def test_cli_config_default():
@@ -255,5 +255,87 @@ def test_cli_scenario_run_generates_reports(tmp_path):
         assert (exp_dir / "stages.csv").is_file()
         assert (exp_dir / "latency.csv").is_file()
         assert (exp_dir / "report.html").is_file()
+
+
+def test_cli_incident_help():
+    """Verify dos-tool incident --help displays commands and exits 0."""
+    result = runner.invoke(app, ["incident", "--help"])
+    assert result.exit_code == 0
+    assert "list" in result.output
+    assert "show" in result.output
+    assert "run" in result.output
+
+
+def test_cli_incident_list():
+    """Verify dos-tool incident list displays available incident scenarios."""
+    result = runner.invoke(app, ["incident", "list"])
+    assert result.exit_code == 0
+    assert "incident_latency" in result.output
+    assert "incident_http_5xx" in result.output
+    assert "incident_combined" in result.output
+
+
+def test_cli_incident_show():
+    """Verify dos-tool incident show displays incident phases and criteria."""
+    result = runner.invoke(app, ["incident", "show", "incident_latency"])
+    assert result.exit_code == 0
+    assert "incident_latency" in result.output
+    assert "Baseline" in result.output
+    assert "Fault" in result.output
+    assert "Recovery" in result.output
+
+
+def test_cli_incident_run_mocked(tmp_path):
+    """Verify dos-tool incident run executes and saves all 6 reports."""
+    from app.incidents.models import (
+        IncidentResult,
+        IncidentLifecycleState,
+        PhaseMetricsSummary,
+        FaultExecutionRecord,
+        RecoveryExecutionRecord,
+        TimelineEvent,
+    )
+
+    mock_res = IncidentResult(
+        experiment_id="20261003_120000_incident_latency",
+        scenario_name="incident_latency",
+        target="http://localhost:3000",
+        start_time="2026-10-03T12:00:00Z",
+        end_time="2026-10-03T12:00:10Z",
+        total_duration_seconds=10.0,
+        lifecycle_state=IncidentLifecycleState.COMPLETED,
+        before_metrics=PhaseMetricsSummary(total_requests=10, successful=10, average_rps=5.0),
+        during_metrics=PhaseMetricsSummary(total_requests=20, successful=15, failed=5, average_rps=5.0),
+        after_metrics=PhaseMetricsSummary(total_requests=10, successful=10, average_rps=5.0),
+        fault=FaultExecutionRecord(fault_type="latency", duration_seconds=5.0, status="completed"),
+        recovery=RecoveryExecutionRecord(status="recovered", recovery_duration_seconds=2.0),
+        timeline=[
+            TimelineEvent(timestamp="2026-10-03T12:00:00Z", event="experiment_started", phase="init"),
+            TimelineEvent(timestamp="2026-10-03T12:00:10Z", event="experiment_completed", phase="completed"),
+        ],
+    )
+
+    with patch("app.cli.IncidentRunner.run", return_value=mock_res):
+        result = runner.invoke(
+            app,
+            ["incident", "run", "incident_latency", "--output", str(tmp_path)],
+        )
+        assert result.exit_code == 0
+        assert "CONTROLLED INCIDENT INJECTION" in result.output
+        assert "COMPARATIVE METRICS" in result.output
+        assert "Faults CSV" in result.output
+        assert "Timeline CSV" in result.output
+
+        # Verify disk outputs
+        inc_dirs = list((tmp_path / "incident_latency").glob("*"))
+        assert len(inc_dirs) == 1
+        exp_dir = inc_dirs[0]
+        assert (exp_dir / "experiment.json").is_file()
+        assert (exp_dir / "stages.csv").is_file()
+        assert (exp_dir / "latency.csv").is_file()
+        assert (exp_dir / "faults.csv").is_file()
+        assert (exp_dir / "timeline.csv").is_file()
+        assert (exp_dir / "report.html").is_file()
+
 
 

@@ -19,6 +19,10 @@ from app.scenarios.loader import list_scenarios, load_scenario
 from app.scenarios.models import Scenario, ScenarioResult, ScenarioStage, StageResult
 from app.scenarios.runner import ScenarioRunner
 from app.reporting.recorder import build_experiment_result, ExperimentRecorder
+from app.incidents.loader import list_incidents, load_incident
+from app.incidents.models import IncidentScenario, IncidentResult
+from app.incidents.runner import IncidentRunner
+from app.reporting.incident_reporter import IncidentRecorder
 
 app = typer.Typer(
     name="dos-tool",
@@ -31,6 +35,13 @@ scenario_app = typer.Typer(
     no_args_is_help=True,
 )
 app.add_typer(scenario_app, name="scenario")
+
+incident_app = typer.Typer(
+    name="incident",
+    help="Manage and execute controlled fault and incident experiments.",
+    no_args_is_help=True,
+)
+app.add_typer(incident_app, name="incident")
 
 console = Console()
 logger = logging.getLogger("dos-tool")
@@ -49,7 +60,7 @@ def setup_logging(log_level: str) -> None:
 @app.command(name="version", help="Show dos-tool version.")
 def version() -> None:
     """Display application version and current phase."""
-    console.print(f"[bold cyan]dos-tool[/bold cyan] version [bold green]{__version__}[/bold green] (Phase 4 - Metrics & Experiment Reporting)")
+    console.print(f"[bold cyan]dos-tool[/bold cyan] version [bold green]{__version__}[/bold green] (Phase 5 - Controlled Fault & Incident Injection)")
 
 
 @app.command(name="config", help="Display application configuration.")
@@ -516,6 +527,224 @@ def run_scenario_cmd(
         console.print(f"JSON Report       : {saved_dir / 'experiment.json'}")
         console.print(f"Stages CSV        : {saved_dir / 'stages.csv'}")
         console.print(f"Latency CSV       : {saved_dir / 'latency.csv'}")
+        console.print(f"HTML Report       : [bold green]{saved_dir / 'report.html'}[/bold green]\n")
+        console.print(header_line + "\n")
+
+        raise typer.Exit(code=0)
+
+    except FileNotFoundError as exc:
+        console.print(f"\n[bold red]Error:[/bold red] {exc}")
+        if debug:
+            raise
+        raise typer.Exit(code=1)
+    except SafetyValidationError as exc:
+        console.print(f"\n[bold red]{exc}[/bold red]")
+        if debug:
+            raise
+        raise typer.Exit(code=1)
+    except typer.Exit:
+        raise
+    except Exception as exc:
+        console.print(f"\n[bold red]Unexpected Error:[/bold red] {exc}")
+        if debug:
+            raise
+        raise typer.Exit(code=1)
+
+
+@incident_app.command(name="list", help="List available incident scenarios.")
+def list_incidents_cmd(
+    scenarios_dir: Annotated[
+        Path,
+        typer.Option("--dir", help="Scenarios directory path.")
+    ] = Path("scenarios"),
+) -> None:
+    """Scan and list discovered incident scenarios."""
+    incidents = list_incidents(scenarios_dir)
+    if not incidents:
+        console.print("\nNo incident scenarios found in directory.\n")
+        raise typer.Exit(code=0)
+
+    console.print("\nAvailable Incident Experiments\n--------------------------------")
+    for idx, inc in enumerate(incidents, start=1):
+        desc = f" - {inc['description']}" if inc['description'] else ""
+        console.print(f"{idx}. [bold cyan]{inc['name']}[/bold cyan] [yellow]({inc['fault_type']})[/yellow]{desc}")
+    console.print("")
+    raise typer.Exit(code=0)
+
+
+@incident_app.command(name="show", help="Show details of an incident scenario without running.")
+def show_incident_cmd(
+    name: Annotated[
+        str,
+        typer.Argument(help="Incident scenario name or path.")
+    ],
+    scenarios_dir: Annotated[
+        Path,
+        typer.Option("--dir", help="Scenarios directory path.")
+    ] = Path("scenarios"),
+) -> None:
+    """Display incident phases, parameters, and recovery criteria."""
+    try:
+        inc = load_incident(name, scenarios_dir=scenarios_dir)
+        header_line = "-" * 40
+        console.print("\nIncident\n" + header_line)
+        console.print(f"Name        : {inc.name}")
+        console.print(f"Description : {inc.description}")
+        console.print(f"Target      : {inc.target}")
+        console.print(f"Method      : {inc.method}\n")
+        console.print("Baseline")
+        console.print(f"Rate        : {inc.baseline.rate:.0f} req/s")
+        console.print(f"Concurrency : {inc.baseline.concurrency}")
+        console.print(f"Duration    : {inc.baseline.duration:.0f}s\n")
+        console.print("Fault")
+        console.print(f"Type        : {inc.fault.type.value}")
+        if inc.fault.delay_ms:
+            console.print(f"Delay       : {inc.fault.delay_ms:.0f} ms")
+        if inc.fault.error_rate:
+            console.print(f"Error Rate  : {inc.fault.error_rate * 100:.0f}%")
+        console.print(f"Duration    : {inc.fault.duration:.0f}s\n")
+        console.print("Recovery")
+        console.print(f"Enabled     : {inc.recovery.enabled}")
+        console.print(f"Timeout     : {inc.recovery.timeout:.0f}s\n" + header_line + "\n")
+        raise typer.Exit(code=0)
+    except FileNotFoundError as exc:
+        console.print(f"\n[bold red]Error:[/bold red] {exc}")
+        raise typer.Exit(code=1)
+    except typer.Exit:
+        raise
+    except Exception as exc:
+        console.print(f"\n[bold red]Error loading incident:[/bold red] {exc}")
+        raise typer.Exit(code=1)
+
+
+@incident_app.command(name="run", help="Execute a controlled fault/incident experiment.")
+def run_incident_cmd(
+    name: Annotated[
+        str,
+        typer.Argument(help="Incident scenario name or YAML file path.")
+    ],
+    config_path: Annotated[
+        Optional[Path],
+        typer.Option("--config", help="Path to custom config YAML file.")
+    ] = None,
+    scenarios_dir: Annotated[
+        Path,
+        typer.Option("--dir", help="Scenarios directory path.")
+    ] = Path("scenarios"),
+    output_dir: Annotated[
+        Path,
+        typer.Option("--output", "-o", help="Base directory for experiment reports.")
+    ] = Path("reports"),
+    timeout: Annotated[
+        Optional[float],
+        typer.Option("--timeout", help="Custom request timeout in seconds.")
+    ] = None,
+    debug: Annotated[
+        bool,
+        typer.Option("--debug", help="Enable debug mode to show full tracebacks.")
+    ] = False,
+) -> None:
+    """Execute complete incident lifecycle: Baseline -> Fault -> Recovery with full reporting."""
+    try:
+        cfg_file = config_path or (Path("configs/config.yaml") if Path("configs/config.yaml").exists() else None)
+        cfg: AppConfig = load_config(cfg_file)
+        setup_logging(cfg.log_level)
+        logging.getLogger("httpx").setLevel(logging.WARNING)
+        logging.getLogger("httpcore").setLevel(logging.WARNING)
+
+        effective_timeout = timeout if timeout is not None else cfg.request_timeout
+
+        incident_scenario = load_incident(name, scenarios_dir=scenarios_dir)
+
+        # Safety validation
+        safety = SafetyController(cfg)
+        safety.validate_incident(incident_scenario)
+
+        header_line = "=" * 48
+        stage_line = "-" * 48
+        console.print("\nDOS TOOL - CONTROLLED INCIDENT INJECTION")
+        console.print(header_line + "\n")
+        console.print(f"Incident      : {incident_scenario.name}")
+        console.print(f"Description   : {incident_scenario.description}")
+        console.print(f"Target        : {incident_scenario.target}")
+        console.print(f"Fault Type    : {incident_scenario.fault.type.value.upper()}")
+        console.print(f"Method        : {incident_scenario.method}\n")
+
+        def on_event(evt) -> None:
+            console.print(f"[bold cyan]>> [{evt.timestamp.split('T')[-1][:8]}][/bold cyan] {evt.event.replace('_', ' ').title()} ([yellow]{evt.phase}[/yellow])")
+
+        runner = IncidentRunner(
+            scenario=incident_scenario,
+            timeout=effective_timeout,
+            on_event=on_event,
+        )
+
+        try:
+            incident_result: IncidentResult = asyncio.run(runner.run())
+        except KeyboardInterrupt:
+            console.print("\n[bold yellow]Incident interrupted by user. Cleaning up fault & finalizing...[/bold yellow]")
+            runner.stop()
+            incident_result = asyncio.run(runner.run())
+
+        # Display Comparative Before / During / After Summary
+        console.print("\n" + header_line)
+        console.print("INCIDENT EXPERIMENT RESULT")
+        console.print(header_line + "\n")
+        console.print(f"Target          : {incident_result.target}")
+        console.print(f"Total Duration  : {incident_result.total_duration_seconds:.1f} s")
+        console.print(f"Fault Duration  : {incident_result.fault.duration_seconds:.1f} s")
+
+        rec_dur_str = f"{incident_result.recovery.recovery_duration_seconds:.1f} s" if incident_result.recovery.recovery_duration_seconds is not None else "N/A"
+        rec_color = "green" if incident_result.recovery.status == "recovered" else "red"
+        console.print(f"Recovery Status : [bold {rec_color}]{incident_result.recovery.status.upper()}[/bold {rec_color}] ({rec_dur_str})\n")
+
+        console.print(stage_line)
+        console.print("COMPARATIVE METRICS (BEFORE / DURING / AFTER)")
+        console.print(stage_line + "\n")
+
+        comp_table = Table(show_header=True, header_style="bold magenta", box=None)
+        comp_table.add_column("Phase", style="cyan")
+        comp_table.add_column("Requests", justify="right")
+        comp_table.add_column("Avg RPS", justify="right")
+        comp_table.add_column("P50", justify="right")
+        comp_table.add_column("P95", justify="right", style="yellow")
+        comp_table.add_column("P99", justify="right", style="yellow")
+        comp_table.add_column("Success %", justify="right", style="green")
+        comp_table.add_column("Error %", justify="right", style="red")
+        comp_table.add_column("5xx", justify="right")
+
+        phases = [
+            ("1. Baseline (Before)", incident_result.before_metrics),
+            ("2. Fault (During)", incident_result.during_metrics),
+            ("3. Recovery (After)", incident_result.after_metrics),
+        ]
+        for p_name, p in phases:
+            comp_table.add_row(
+                p_name,
+                str(p.total_requests),
+                f"{p.average_rps:.1f}",
+                f"{p.p50_latency_ms:.1f} ms",
+                f"{p.p95_latency_ms:.1f} ms",
+                f"{p.p99_latency_ms:.1f} ms",
+                f"{p.success_rate:.1f}%",
+                f"{p.error_rate:.1f}%",
+                str(p.http_5xx),
+            )
+
+        console.print(comp_table)
+        console.print("\n" + stage_line)
+        console.print("EXPERIMENT REPORTS")
+        console.print(stage_line + "\n")
+
+        recorder = IncidentRecorder(output_base_dir=output_dir)
+        saved_dir = recorder.record(incident_result)
+
+        console.print(f"Reports Directory : [cyan]{saved_dir}[/cyan]")
+        console.print(f"JSON Report       : {saved_dir / 'experiment.json'}")
+        console.print(f"Stages CSV        : {saved_dir / 'stages.csv'}")
+        console.print(f"Latency CSV       : {saved_dir / 'latency.csv'}")
+        console.print(f"Faults CSV        : {saved_dir / 'faults.csv'}")
+        console.print(f"Timeline CSV      : {saved_dir / 'timeline.csv'}")
         console.print(f"HTML Report       : [bold green]{saved_dir / 'report.html'}[/bold green]\n")
         console.print(header_line + "\n")
 

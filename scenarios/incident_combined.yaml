@@ -1,0 +1,23 @@
+name: incident_combined
+description: Controlled combined latency and HTTP 5xx incident experiment
+target: http://localhost:5000/api/products
+method: GET
+
+baseline:
+  rate: 5
+  concurrency: 2
+  duration: 10
+
+fault:
+  type: combined
+  delay_ms: 300
+  error_rate: 0.10
+  duration: 20
+
+recovery:
+  enabled: true
+  criteria:
+    max_p95_ms: 50
+    max_error_rate: 0.01
+    consecutive_healthy_samples: 3
+  timeout: 20

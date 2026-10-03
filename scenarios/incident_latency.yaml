@@ -1,0 +1,22 @@
+name: incident_latency
+description: Controlled latency incident experiment for frontend resilience
+target: http://localhost:3000
+method: GET
+
+baseline:
+  rate: 5
+  concurrency: 2
+  duration: 10
+
+fault:
+  type: latency
+  delay_ms: 300
+  duration: 20
+
+recovery:
+  enabled: true
+  criteria:
+    max_p95_ms: 50
+    max_error_rate: 0.01
+    consecutive_healthy_samples: 3
+  timeout: 20

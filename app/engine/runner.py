@@ -107,6 +107,7 @@ class LoadTestRunner:
         concurrency: int,
         duration: float,
         timeout: float = 5.0,
+        headers: Optional[Dict[str, str]] = None,
         transport: Optional[httpx.AsyncBaseTransport] = None,
         on_progress: Optional[Callable[[dict, float], None]] = None,
     ) -> None:
@@ -115,6 +116,7 @@ class LoadTestRunner:
         self.concurrency = int(concurrency)
         self.duration = float(duration)
         self.timeout = float(timeout)
+        self.headers = headers or {}
         self.transport = transport
         self.on_progress = on_progress
         self._scheduler: Optional[RateScheduler] = None
@@ -150,6 +152,7 @@ class LoadTestRunner:
             timeout=self.timeout,
             transport=self.transport,
             limits=limits,
+            headers=self.headers,
         )
 
         async def worker_wrapper():
